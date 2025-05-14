@@ -23,6 +23,7 @@ import android.util.Log;
 
 /**
  * Utility class that provides caching capabilities for video playback.
+ * Uses a strict singleton pattern to ensure only one cache instance exists.
  */
 @UnstableApi
 public final class VideoCache {
@@ -30,82 +31,105 @@ public final class VideoCache {
   private static final String TAG = "VideoCache";
   private static final String CACHE_DIRECTORY_NAME = "exoplayer";
 
-  private static @Nullable DataSource.Factory dataSourceFactory;
-  private static @Nullable DefaultHttpDataSource.Factory httpDataSourceFactory;
-  private static @Nullable DatabaseProvider databaseProvider;
-  private static @Nullable Cache downloadCache;
+  // Singleton instance of this class
+  private static volatile VideoCache sInstance;
+  
+  // Cache components
+  private DataSource.Factory dataSourceFactory;
+  private DefaultHttpDataSource.Factory httpDataSourceFactory;
+  private DatabaseProvider databaseProvider;
+  private Cache downloadCache;
+  
+  /**
+   * Gets the singleton instance of VideoCache.
+   * 
+   * @param context The application context
+   * @return The VideoCache singleton instance
+   */
+  public static VideoCache getInstance(Context context) {
+    if (sInstance == null) {
+      synchronized (VideoCache.class) {
+        if (sInstance == null) {
+          sInstance = new VideoCache(context.getApplicationContext());
+        }
+      }
+    }
+    return sInstance;
+  }
+
+  /**
+   * Private constructor that initializes the cache.
+   * 
+   * @param context The application context
+   */
+  private VideoCache(Context context) {
+    // Initialize cache components
+    this.databaseProvider = new StandaloneDatabaseProvider(context);
+    
+    // Initialize cache
+    File cacheDirectory = new File(context.getCacheDir(), CACHE_DIRECTORY_NAME);
+    if (!cacheDirectory.exists()) {
+      cacheDirectory.mkdirs();
+    }
+    
+    this.downloadCache = new SimpleCache(
+        cacheDirectory,
+        new NoOpCacheEvictor(),
+        this.databaseProvider);
+        
+    // Initialize HTTP data source factory
+    CookieManager cookieManager = new CookieManager();
+    cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER);
+    CookieHandler.setDefault(cookieManager);
+    this.httpDataSourceFactory = new DefaultHttpDataSource.Factory();
+    
+    // Create the cached data source factory
+    this.dataSourceFactory = new CacheDataSource.Factory()
+        .setCache(this.downloadCache)
+        .setUpstreamDataSourceFactory(this.httpDataSourceFactory)
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+  }
 
   /**
    * Returns a {@link DataSource.Factory} that uses caching.
    */
-  public static synchronized DataSource.Factory getDataSourceFactory(Context context) {
-    if (dataSourceFactory == null) {
-      context = context.getApplicationContext();
-      DefaultHttpDataSource.Factory upstreamHttpFactory = getHttpDataSourceFactory(context);
-      
-      dataSourceFactory = new CacheDataSource.Factory()
-          .setCache(getDownloadCache(context))
-          .setUpstreamDataSourceFactory(upstreamHttpFactory)
-          .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
-    }
+  public DataSource.Factory getDataSourceFactory() {
     return dataSourceFactory;
   }
 
   /**
    * Returns a {@link DefaultHttpDataSource.Factory}.
    */
-  public static synchronized DefaultHttpDataSource.Factory getHttpDataSourceFactory(
-      Context context) {
-    if (httpDataSourceFactory == null) {
-      CookieManager cookieManager = new CookieManager();
-      cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER);
-      CookieHandler.setDefault(cookieManager);
-      httpDataSourceFactory = new DefaultHttpDataSource.Factory();
-    }
+  public DefaultHttpDataSource.Factory getHttpDataSourceFactory() {
     return httpDataSourceFactory;
-  }
-
-  /**
-   * Returns the download cache.
-   */
-  private static synchronized Cache getDownloadCache(Context context) {
-    if (downloadCache == null) {
-      context = context.getApplicationContext();
-      File cacheDirectory = new File(context.getCacheDir(), CACHE_DIRECTORY_NAME);
-      if (!cacheDirectory.exists()) {
-        cacheDirectory.mkdirs();
-      }
-      downloadCache =
-          new SimpleCache(
-              cacheDirectory,
-              new NoOpCacheEvictor(),
-              getDatabaseProvider(context));
-    }
-    return downloadCache;
   }
 
   /**
    * Gets the directory where cached content is stored.
    */
-  public static synchronized File getCacheDirectory(Context context) {
-    File cacheDir = new File(context.getApplicationContext().getCacheDir(), CACHE_DIRECTORY_NAME);
-    if (!cacheDir.exists()) {
-        cacheDir.mkdirs();
-    }
-    return cacheDir;
+  public File getCacheDirectory(Context context) {
+    return new File(context.getApplicationContext().getCacheDir(), CACHE_DIRECTORY_NAME);
   }
-
+  
   /**
-   * Returns the database provider.
+   * Releases the cache resources when they're no longer needed.
+   * Should be called when the app is being destroyed.
    */
-  private static synchronized DatabaseProvider getDatabaseProvider(Context context) {
-    if (databaseProvider == null) {
-      databaseProvider = new StandaloneDatabaseProvider(context);
+  public void release() {
+    try {
+      if (downloadCache != null) {
+        downloadCache.release();
+        downloadCache = null;
+      }
+    } catch (Exception e) {
+      Log.e(TAG, "Error releasing cache", e);
     }
-    return databaseProvider;
   }
-
-  private VideoCache() {
-    // Prevent instantiation
+  
+  /**
+   * Utility method to get the data source factory from the singleton instance.
+   */
+  public static DataSource.Factory getDataSourceFactory(Context context) {
+    return getInstance(context).getDataSourceFactory();
   }
 } 

@@ -63,6 +63,9 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     flutterState.stopListening(binding.getBinaryMessenger());
     flutterState = null;
     onDestroy();
+    
+    // Release the video cache to prevent "Another SimpleCache instance uses the folder" errors
+    VideoCache.getInstance(binding.getApplicationContext()).release();
   }
 
   private void disposeAllPlayers() {
